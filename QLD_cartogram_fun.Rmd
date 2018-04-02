@@ -1,0 +1,24 @@
+---
+title: "Queensland Cartogram Fun"
+author: "Jayden Macklin-Cordes"
+date: "02/04/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(rgdal)
+library(sp)
+library(rgeos)
+```
+
+This fine Easter Monday, I decided to make a cartogram of Queensland. Cartograms are maps where area is transformed according to some other variable. In this case, my variable of interest is population. Basically, I'm creating a map of Queensland where the size of Lower Government Areas (LGAs) have been transformed according to the area's population.
+
+I'm following this excellent [R Bloggers tutorial](https://www.r-bloggers.com/cartograms-with-r/).
+
+## The data
+
+Mapping data for Queensland LGAs can be downloaded from the [Queensland Government Data website](https://data.qld.gov.au/dataset/local-government-area-boundaries-queensland). The dataset can be downloaded in a variety of file formats and projections. Downloading the data is pretty straightforward, you just go to the link above and click through to the dataset. In this case, I selected Shapefile (.shp) format and the Web Mercator (EPSG:3857) projection. You have to enter your email address, after which you'll receive an email with a link to a zip file attachment.
+
+> The dataset I've used here is © State of Queensland (Department of Natural Resources, Mines and Energy) 2018 and is licensed under a [Creative Commons---Attribution 4.0](https://creativecommons.org/licenses/by/4.0/) licence.
+
+text
