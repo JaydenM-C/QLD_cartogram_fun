@@ -5,20 +5,157 @@ date: "02/04/2018"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-library(rgdal)
-library(sp)
-library(rgeos)
-```
-
-This fine Easter Monday, I decided to make a cartogram of Queensland. Cartograms are maps where area is transformed according to some other variable. In this case, my variable of interest is population. Basically, I'm creating a map of Queensland where the size of Lower Government Areas (LGAs) have been transformed according to the area's population.
+This fine Easter Monday, I decided to make a cartogram of Queensland. Cartograms are maps where area is transformed according to some other variable. In this case, my variable of interest is population. Basically, I'm creating a map of Queensland where the size of Local Government Areas (LGAs) have been transformed according to the area's population.
 
 I'm following this excellent [R Bloggers tutorial](https://www.r-bloggers.com/cartograms-with-r/).
 
+These are all the packages we'll need. Any missing packages can be installed from CRAN using the `install.packages` function.
+
+```{r setup, message=FALSE}
+library(rgdal)
+library(sp)
+library(rgeos)
+library(dplyr)
+library(devtools)
+library(RColorBrewer)
+
+```
+
 ## The data
 
-Mapping data for Queensland LGAs can be downloaded from the [Queensland Government Data website](https://data.qld.gov.au/dataset/local-government-area-boundaries-queensland). The dataset can be downloaded in a variety of file formats and projections. Downloading the data is pretty straightforward, you just go to the link above and click through to the dataset. In this case, I selected Shapefile (.shp) format and the Web Mercator (EPSG:3857) projection. You have to enter your email address, after which you'll receive an email with a link to a zip file attachment.
+Mapping data for Queensland LGAs can be downloaded from the [Queensland Government Data website](https://data.qld.gov.au/dataset/local-government-area-boundaries-queensland). The dataset can be downloaded in a variety of file formats and projections. Downloading the data is pretty straightforward, you just go to the link above and click through to the dataset. You have to enter your email address, after which you'll receive an email with a link to a zip file attachment. In this case, I selected Shapefile (.shp) format and the default "as stored" projection (EPSG:4938), which I believe is well-suited for Australia. The Web Mercator (EPSG:3857) projection is also available, and I saved a copy of that one in this github repository as well (just tweak the first line in the code block below to load it). 
 
-> The dataset I've used here is © State of Queensland (Department of Natural Resources, Mines and Energy) 2018 and is licensed under a [Creative Commons---Attribution 4.0](https://creativecommons.org/licenses/by/4.0/) licence.
+> The dataset I've used here is © State of Queensland (Department of Natural Resources, Mines and Energy) 2018 and is licensed under a [Creative Commons---Attribution 4.0](https://creativecommons.org/licenses/by/4.0/) licence. See the metadata in the  [Local_Government_Areas.html](https://github.com/JaydenM-C/QLD_cartogram_fun/blob/master/Queensland_LGAs_EPSG3857/Local_Government_Areas.html) file for more details.
 
-text
+The population data comes from the [Queensland Government Statistician's Office](http://www.qgso.qld.gov.au/products/tables/erp-lga-qld/index.php) and includes an estimation of each LGA's population at 30 June each year, from 1991 to 2016. It can also be found on the [Queensland Government Data website](https://data.qld.gov.au/dataset/erp-lga-qld). There is an API, but I just downloaded the CSV.
+
+> The population dataset is licensed under a [Creative Commons---Attribution 3.0](https://creativecommons.org/licenses/by/3.0/au/) licence.
+
+```{r data_wrangling, warning=FALSE}
+# Read Shapefile
+LGAs <- readOGR("Queensland_LGAs_EPSG4938/Local_Government_Areas.shp") # Change file path to "Queensland_LGAs_EPSG3857/Local_Government_Areas.shp" for the Web Mercator projection
+
+proj4string(LGAs) # Don't fully understand what this is!
+
+# Read population data
+pop <- read.csv("erp-lga-qld.csv", nrows = 78, skip = 5)
+colnames(pop) <- c("LGA", paste0("pop_", 1991:2016))
+
+for (col in 2:ncol(pop)) {
+  pop[ , col] <- gsub(",", "", pop[ , col])
+  pop[ , col] <- as.numeric(pop[ , col])
+}
+
+# Some ugly manual wrangling so LGA names in the Shapefile and LGA names in the population data match
+pop$LGA <- gsub("\\(S\\)", "Shire", pop$LGA)
+pop$LGA <- gsub("\\(C\\)", "City", pop$LGA)
+pop$LGA <- gsub("\\(R\\)", "Regional", pop$LGA)
+pop$LGA <- gsub("\\(T\\)", "Town", pop$LGA)
+pop$LGA <- gsub("-", " ", pop$LGA)
+pop[!pop$LGA %in% LGAs@data$LGA, "LGA"] <- gsub("Shire", "Aboriginal Shire", pop[!pop$LGA %in% LGAs@data$LGA, "LGA"])
+
+# Merge the population data with the data in the shapefile
+LGAs@data <- full_join(LGAs@data, pop, by = "LGA")
+
+# Add a population density variable
+LGAs@data <- mutate(LGAs@data, pop_density_2016 = pop_2016 / CA_AREA_SQ)
+
+```
+
+We now have a SpatialPolygonsDataFrame object called LGAs. This object contains a number of slots, including a data slot which is a regular data frame that can be accessed by calling `LGAs@data`. In that slot, there are a bunch of columns that came with the original Shapefile (of interest will be the column giving an LGA's area in square kilometres) plus some population columns appended from the population dataset. Lastly, there's a column which gives the population density of an LGA, calculated by dividing an LGA's 2016 population by its area. You can inspect some data of interest below:
+
+```{r data_inspec}
+head(select(LGAs@data, LGA, pop_2016, CA_AREA_SQ, pop_density_2016))
+
+```
+
+## Visualisation
+
+### Choropleths
+
+Before diving into cartograms, we can start with a simpler choropleth map showing the population density of different LGAs. One tricky thing here is the heavily skewed and highly varied nature of population densities in Queensland LGAs.
+
+```{r pop_density_summary}
+summary(LGAs@data$pop_density_2016)
+```
+```{r pop_density_plot}
+plot(density(LGAs@data$pop_density_2016), main = "Population density: Queensland LGAs", xlab = "People per square kilometre", ylab = "LGAs")
+```
+
+Most LGAs constitute large, sparsely populated regions, with less than 1 person for every square km. However, there are outliers, the obvious one being Brisbane City (856 people per square km). There are other cases where an LGA is very small in area, for example, the Wujal Wujal Aboriginal Shire on Cape York Peninsula has a population of just 296, but it has one of the higher population densities since it covers less than 12 square kms. At the opposite end of the scale, Diamantina Shire (in the state's far central west) has almost the same population (297) but spread out over an area larger than Ireland (that's 1 person for nearly every 350km^2^!). If we apply a standard, even colour gradient to such a skewed distribution, nearly all the regions will appear the same colour with a few at the other end of the spectrum.
+
+```{r pop_density_choropleth}
+pal <- colorRampPalette(brewer.pal(9, "Purples"))(100)
+
+spplot(LGAs, "pop_density_2016", col.regions = pal, main = "Population density (even colour gradient)", col = "dimgrey")
+
+```
+
+To fix this, I log-transformed the population density data.
+
+```{r log_pop_density_summary}
+LGAs@data <- mutate(LGAs@data, log_pop_density = log(LGAs$pop_density_2016))
+plot(density(LGAs$log_pop_density), main = "Log population density: Queensland LGAs", xlab = "People per square kilometre (log transformed)", ylab = "LGAs")
+
+```
+```{r log_pop_density_choropleth}
+spplot(LGAs, "log_pop_density", col.regions = pal, main = "Population density (log scale)", col = "dimgrey")
+
+```
+
+A bit more interesting!
+
+### Cartograms
+
+Installing the cartogram packages on OSX first requires installation of the fftw library via the command line `brew install fftw`. Then, back in R, install the two packages with `install_github("omegahat/Rcartogram")` and `install_github('chrisbrunsdon/getcartr',subdir='getcartr')`.
+
+```{r cartogram, message=FALSE}
+# Load the newly installed packages
+library(Rcartogram)
+library(getcartr)
+
+LGAs_carto <- quick.carto(spdf = LGAs, v = LGAs@data$pop_2016)
+
+spplot(LGAs_carto, "pop_2016", col.regions = pal, col = "dimgrey",
+       main = "Population cartogram: Queensland LGAs")
+
+```
+
+Alternatively we can colour each LGA by area.
+
+```{r area_cartogram}
+spplot(LGAs_carto, "CA_AREA_SQ", col.regions = pal, col = "dimgrey",
+       main = "Population cartogram as choropleth of area")
+```
+
+Again, we're having a bit of trouble with skewed distributions. The most populated LGAs are also some of the smallest. If we log transform area, it looks like this:
+
+```{r log_area_cartogram}
+LGAs@data <- mutate(LGAs@data, log_area = log(LGAs$CA_AREA_SQ))
+LGAs_carto <- quick.carto(spdf = LGAs, v = LGAs@data$pop_2016)
+
+spplot(LGAs_carto, "log_area", col.regions = pal, col = "dimgrey",
+       main = "Population cartogram as choropleth of area (log scale)")
+```
+
+Dunno that that really adds much to the experience but there you have it!
+
+## Limitations
+
+I can't imagine how these maps would be useful to anyone. Queensland's population is so heavily skewed towards the South East region that the cartogram goes from being a good bit of fun (see, for example, [these neat interactive cartograms of US states](http://rpubs.com/Victorp/topogRam_USA)) to a bit absurd and unrecognisable. You can reduce the effect by log transforming population (see below) but that seems to defeat the purpose a bit. Nevertheless, it was a fun little exercise to get familiar with cartograms in R.
+
+```{r log_pop_cartogram}
+LGAs@data <- mutate(LGAs@data, log_pop = log(LGAs$pop_2016))
+LGAs_carto <- quick.carto(spdf = LGAs, v = LGAs@data$log_pop)
+
+spplot(LGAs_carto, "pop_2016", col.regions = pal, col = "dimgrey",
+       main = "Log population cartogram: Queensland LGAs")
+```
+
+A better way to get a more sensible Queensland cartogram probably would be to work at the level of [Queensland's regions](https://en.wikipedia.org/wiki/Regions_of_Queensland). I'm sure the shapefiles and population data exist for this (probably via the same QLD Government website as I used for this project) but I'll leave it for someone else/another day. Another issue with the data I've used here is unmarked coastlines. As anyone familiar with Queensland's geography will have recognised, many of the coastal LGAs extend out into the ocean. I've just gone with it for my purposes here, but ideally it would be nice to have a shapefile with proper coastlines.
+
+Looking forward, the potential exists to make interactive cartograms. The topogRam package is built for this, however, it's currently limited to a select few geojson maps built into the package (you can supply a data frame of your own data but not a SpatialPolygonDataFrame object).
+
+Lastly, I'm thinking about what fun ways cartograms could be used with linguistic data. Speaker numbers would be an obvious one. One idea is to take some quantification of documentary richness (number of references in glottolog or something like that) and map the level of documentation in different parts of Australia/the world. The length of available wordlists could be another one in a place like Australia, where this can vary a lot between better-studied and less-studied languages. Of course, linguistic cartograms would require linguistic polygons, which can be problematic and difficult to obtain.
+
+Happy cartogramming!
